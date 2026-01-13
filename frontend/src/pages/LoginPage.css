@@ -51,11 +51,16 @@
     margin: 0px 30px;
 }
 
-.input input{
-    height: 25px;
-    width: 200;
-    font-size: 20px;
-
+.input input {
+    height: 40px;          /* bigger for easier typing */
+    width: 200px;          /* add px */
+    font-size: 18px;       /* adjust as needed */
+    padding: 0 10px;       /* some horizontal padding */
+    border: none;          /* remove default border */
+    outline: none;         /* remove blue focus outline */
+    color: #000;           /* black text so it’s visible */
+    background: #eaeaea;   /* optional, match parent */
+    border-radius: 5px;    /* optional rounding */
 }
 
 .forgot-password{
