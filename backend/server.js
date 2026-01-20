@@ -5,6 +5,8 @@ import cors from "cors";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 const uploadDir = "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -33,6 +35,8 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
   password_hash: { type: String, required: true },
+  passwordResetToken: String,
+  passwordResetExpires: Date,
   phone: { type: String, default: "" },
   storageUsed: { type: Number, default: 0 }, // GB
   storageLimit: { type: Number, default: 1024 }, // GB
@@ -148,6 +152,30 @@ app.patch("/api/users/:userId/password", async (req, res) => {
   }
 });
 
+// RESET PASSWORD
+
+app.post("/resetpassword", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // TODO: generate token & send reset email
+
+    return res.json({ message: "Reset link sent" });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 
 
 

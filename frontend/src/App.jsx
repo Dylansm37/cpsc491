@@ -4,6 +4,7 @@ import LoginPage from "./pages/Login_Signup";
 import UploadFiles from "./pages/UploadFiles";
 import Settings from "./pages/Settings";
 import Manage from "./pages/ManageFiles";
+import ResetPassword from "./pages/ResetPassword";
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
       <Route path="/upload" element={<UploadFiles />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/manage" element={<Manage />} />
+      <Route path="/resetpassword" element={<ResetPassword />} />
     </Routes>
   );
 }

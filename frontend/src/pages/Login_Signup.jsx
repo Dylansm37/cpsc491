@@ -111,7 +111,13 @@ const LoginPage = () => {
 
         {action === "Login" && (
           <div className="forgot-password">
-            Lost password? <span>click here</span>
+            Lost password?{" "}
+            <span
+              style={{ cursor: "pointer", color: "blue" }}
+              onClick={() => navigate("/resetpassword")}
+            >
+              click here
+            </span>
           </div>
         )}
 
