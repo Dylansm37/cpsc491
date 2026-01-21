@@ -5,6 +5,7 @@ import UploadFiles from "./pages/UploadFiles";
 import Settings from "./pages/Settings";
 import Manage from "./pages/ManageFiles";
 import ResetPassword from "./pages/ResetPassword";
+import NewPassword from "./pages/NewPassword";
 
 function App() {
   return (
@@ -15,6 +16,8 @@ function App() {
       <Route path="/settings" element={<Settings />} />
       <Route path="/manage" element={<Manage />} />
       <Route path="/resetpassword" element={<ResetPassword />} />
+      <Route path="/newpassword/:token" element={<NewPassword />} />
+      
     </Routes>
   );
 }

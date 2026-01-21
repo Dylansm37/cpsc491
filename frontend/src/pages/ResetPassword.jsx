@@ -1,24 +1,27 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./ResetPassword.css";
-import email_icon from "../Components/Assets/email.png"; // same as login page
+import email_icon from "../Components/Assets/email.png";
 
 const ResetPassword = () => {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleReset = async () => {
     setError("");
     setSuccess("");
 
-    if (!email) {
+    if (!email.trim()) {
       setError("Please enter your email.");
       return;
     }
 
     try {
+      setLoading(true);
+
       const res = await fetch("http://localhost:3000/resetpassword", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -27,16 +30,20 @@ const ResetPassword = () => {
 
       const data = await res.json();
 
+      // 🔴 IMPORTANT: handle backend errors FIRST
       if (!res.ok) {
-        setError(data.error || "User not found");
+        setError(data.error || "User does not exist.");
         return;
       }
 
-      setSuccess("Email Sent!");
+      // ✅ Only runs if backend returned 200
+      setSuccess("Email sent! Check your inbox.");
       setEmail("");
     } catch (err) {
       console.error("Reset password fetch error:", err);
       setError("Server error. Please try again later.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -52,11 +59,16 @@ const ResetPassword = () => {
             placeholder="Enter your email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            disabled={loading}
           />
         </div>
 
-        <button className="submit-btn" onClick={handleReset}>
-          Submit
+        <button
+          className="submit-btn"
+          onClick={handleReset}
+          disabled={loading}
+        >
+          {loading ? "Sending..." : "Submit"}
         </button>
 
         {error && <div className="error-message">{error}</div>}
@@ -65,6 +77,7 @@ const ResetPassword = () => {
         <button
           className="back-login"
           onClick={() => navigate("/")}
+          disabled={loading}
         >
           Back to Login
         </button>
