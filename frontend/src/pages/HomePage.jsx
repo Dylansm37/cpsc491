@@ -51,6 +51,9 @@ const getDisplayName = (filename) => {
 
   // Calculate storage percentage
   const storagePercent = (userData.storageUsed / userData.storageLimit) * 100;
+  const storageUsedRounded = userData.storageUsed.toFixed(2);
+  const storageLimitRounded = userData.storageLimit.toFixed(2);
+
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -66,9 +69,10 @@ const getDisplayName = (filename) => {
           <div className="bg-white p-6 rounded-lg shadow-md">
             <h2 className="text-xl font-semibold mb-3">Storage Usage</h2>
             <p className="text-gray-600 mb-2">
-              {userData.storageUsed} GB / {userData.storageLimit} GB (
-              {(userData.storageLimit / 1024).toFixed(1)} TB)
+              {storageUsedRounded} GB / {storageLimitRounded} GB (
+              {(userData.storageLimit / 1024).toFixed(2)} TB)
             </p>
+
             <div className="w-full bg-gray-200 rounded-full h-4 mb-2">
               <div
                 className={`h-4 rounded-full transition-all duration-500 ${
