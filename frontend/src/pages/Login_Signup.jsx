@@ -11,7 +11,7 @@ const LoginPage = () => {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState(""); // New state for confirm password
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const navigate = useNavigate();
 
@@ -54,6 +54,8 @@ const LoginPage = () => {
 
       // ✅ LOGIN SUCCESS
       if (action === "Login") {
+        // Store the JWT token
+        localStorage.setItem("token", data.token);
         localStorage.setItem("userId", data.userId);
         localStorage.setItem("username", data.username);
         navigate("/home");
