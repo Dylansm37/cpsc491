@@ -34,6 +34,16 @@ const userSchema = new mongoose.Schema(
 
     accountStatus: { type: String, default: "Active" },
     twoFactorEnabled: { type: Boolean, default: false },
+
+    sharedLinks: [
+      {
+        linkId: String,
+        filename: String,
+        password: String,
+        expiresAt: Date,
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );
