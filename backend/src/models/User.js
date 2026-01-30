@@ -52,6 +52,22 @@ const userSchema = new mongoose.Schema({
   pendingDeviceUserAgent: String,
   
   createdAt: { type: Date, default: Date.now },
-});
+
+  sharedLinks: [
+      {
+        linkId: String,
+        filename: String,
+        password: String,
+        expiresAt: Date,
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+
+
+
+
+},
+  { timestamps: true }
+);
 
 export default mongoose.model("User", userSchema);
