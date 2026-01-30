@@ -245,6 +245,125 @@ app.delete("/api/files/:userId/:filename", authenticateToken, async (req, res) =
   }
 });
 
+// CHECK IF DEVICE IS TRUSTED
+app.post("/check-device", async (req, res) => {
+  const { email, deviceToken } = req.body;
+  
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
+    // If device auth is not enabled, allow all devices
+    // Handle undefined as false
+    if (!user.deviceAuthEnabled || user.deviceAuthEnabled === undefined) {
+      return res.json({ trusted: true, deviceAuthEnabled: false });
+    }
+    
+    // Initialize trustedDevices array if it doesn't exist
+    if (!user.trustedDevices) {
+      user.trustedDevices = [];
+    }
+    
+    // Check if device is in trusted list
+    const trustedDevice = user.trustedDevices.find(d => d.deviceToken === deviceToken);
+    
+    if (trustedDevice) {
+      // Update last used time
+      trustedDevice.lastUsed = new Date();
+      await user.save();
+      return res.json({ trusted: true, deviceAuthEnabled: true });
+    }
+    
+    return res.json({ trusted: false, deviceAuthEnabled: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// TRUST NEW DEVICE
+app.post("/trust-device", async (req, res) => {
+  const { email, deviceToken, deviceName, userAgent } = req.body;
+  
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
+    // Initialize trustedDevices array if it doesn't exist
+    if (!user.trustedDevices) {
+      user.trustedDevices = [];
+    }
+    
+    // Check if device already trusted
+    const alreadyTrusted = user.trustedDevices.find(d => d.deviceToken === deviceToken);
+    if (alreadyTrusted) {
+      return res.json({ message: "Device already trusted" });
+    }
+    
+    // Add device to trusted list
+    user.trustedDevices.push({
+      deviceToken,
+      deviceName,
+      userAgent,
+      ipAddress: req.ip || req.connection.remoteAddress,
+      trustedAt: new Date(),
+      lastUsed: new Date(),
+    });
+    
+    await user.save();
+    
+    res.json({ message: "Device trusted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// REMOVE TRUSTED DEVICE
+app.delete("/api/users/:userId/trusted-devices/:deviceToken", authenticateToken, async (req, res) => {
+  const { userId, deviceToken } = req.params;
+  
+  if (req.user.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized access" });
+  }
+  
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
+    user.trustedDevices = user.trustedDevices.filter(d => d.deviceToken !== deviceToken);
+    await user.save();
+    
+    res.json({ message: "Device removed", trustedDevices: user.trustedDevices });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to remove device" });
+  }
+});
+
+// TOGGLE DEVICE AUTH FEATURE
+app.patch("/api/users/:userId/device-auth", authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const { enabled } = req.body;
+  
+  if (req.user.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized access" });
+  }
+  
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
+    user.deviceAuthEnabled = enabled;
+    await user.save();
+    
+    res.json({ message: "Device auth setting updated", deviceAuthEnabled: user.deviceAuthEnabled });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update setting" });
+  }
+});
+
 // SERVE UPLOADED FILES
 app.use("/uploads", express.static(uploadDir));
 

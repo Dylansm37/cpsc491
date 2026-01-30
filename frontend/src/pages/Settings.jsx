@@ -30,6 +30,10 @@ const Settings = () => {
   const [twoFactorAuth, setTwoFactorAuth] = useState(true);
   const [dataEncryption, setDataEncryption] = useState(true);
 
+  // Device authentication
+  const [deviceAuthEnabled, setDeviceAuthEnabled] = useState(false);
+  const [trustedDevices, setTrustedDevices] = useState([]);
+
   // Load user data from backend
   useEffect(() => {
     if (!userId || !token) {
@@ -49,6 +53,10 @@ const Settings = () => {
         });
         setPhoneInput(data.phone || "");
         setTwoFactorAuth(data.twoFactorEnabled || false);
+        
+        // Set device auth settings
+        setDeviceAuthEnabled(data.deviceAuthEnabled || false);
+        setTrustedDevices(data.trustedDevices || []);
       } catch (err) {
         console.error(err);
         // fetchWithAuth will handle logout if token is invalid
@@ -151,6 +159,66 @@ const Settings = () => {
     } catch (err) {
       console.error(err);
       alert("Server error while updating password");
+    }
+  };
+
+  // Toggle device authentication
+  const handleDeviceAuthToggle = async () => {
+    const newValue = !deviceAuthEnabled;
+    
+    try {
+      const res = await fetchWithAuth(`http://localhost:3000/api/users/${userId}/device-auth`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: newValue }),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        alert("Session expired. Please log in again.");
+        logout();
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || "Failed to update device auth");
+
+      setDeviceAuthEnabled(newValue);
+      
+      if (newValue) {
+        alert("Device authentication enabled! Only trusted devices can now access your account.");
+      } else {
+        alert("Device authentication disabled. All devices can access your account.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Server error while updating device auth");
+    }
+  };
+
+  // Remove a trusted device
+  const handleRemoveDevice = async (deviceToken) => {
+    if (!window.confirm("Are you sure you want to remove this device?")) return;
+
+    try {
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/users/${userId}/trusted-devices/${deviceToken}`,
+        { method: "DELETE" }
+      );
+
+      if (res.status === 401 || res.status === 403) {
+        alert("Session expired. Please log in again.");
+        logout();
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || "Failed to remove device");
+
+      setTrustedDevices(data.trustedDevices);
+      alert("Device removed successfully!");
+    } catch (err) {
+      console.error(err);
+      alert("Server error while removing device");
     }
   };
 
@@ -319,6 +387,63 @@ const Settings = () => {
           <p className="text-sm text-gray-500 mt-4">
             Note: Security preferences are currently for display only. Backend integration coming soon.
           </p>
+        </div>
+
+        {/* Device Authentication */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">Device Authentication</h2>
+          
+          <label className="flex items-center gap-2 cursor-pointer mb-4">
+            <input
+              type="checkbox"
+              checked={deviceAuthEnabled}
+              onChange={handleDeviceAuthToggle}
+              className="checkbox checkbox-primary"
+            />
+            <span className="font-medium">Enable Device Authentication</span>
+          </label>
+          
+          <p className="text-sm text-gray-600 mb-4">
+            When enabled, only trusted devices can access your account. You'll be prompted to trust new devices on login.
+          </p>
+
+          {deviceAuthEnabled && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-3">Trusted Devices</h3>
+              
+              {trustedDevices && trustedDevices.length > 0 ? (
+                <div className="space-y-3">
+                  {trustedDevices.map((device, index) => (
+                    <div
+                      key={index}
+                      className="flex justify-between items-center border border-gray-200 rounded-lg p-4"
+                    >
+                      <div>
+                        <p className="font-medium">{device.deviceName || "Unknown Device"}</p>
+                        <p className="text-sm text-gray-500">
+                          Added: {new Date(device.trustedAt).toLocaleDateString()}
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          Last used: {new Date(device.lastUsed).toLocaleDateString()}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          IP: {device.ipAddress || "Unknown"}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveDevice(device.deviceToken)}
+                        className="btn btn-sm btn-outline btn-error"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500">No trusted devices yet. Log in from a new device to add one.</p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
