@@ -1,3 +1,4 @@
+import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -26,6 +27,12 @@ const Settings = () => {
   const [twoFactorAuth, setTwoFactorAuth] = useState(true);
   const [dataEncryption, setDataEncryption] = useState(true);
 
+  // =========================
+  // PASSKEYS (WebAuthn)
+  // =========================
+  const [passkeyStatus, setPasskeyStatus] = useState("idle"); // idle | working
+  const [hasPasskey, setHasPasskey] = useState(false);
+
   // Load user data from backend
   useEffect(() => {
     if (!userId) {
@@ -53,6 +60,24 @@ const Settings = () => {
 
     fetchUser();
   }, [userId, navigate]);
+
+  // Check if user already has a passkey
+  useEffect(() => {
+    if (!userId) return;
+
+    const checkPasskey = async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/webauthn/status/${userId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setHasPasskey(!!data.hasPasskey);
+      } catch (err) {
+        // ignore silently
+      }
+    };
+
+    checkPasskey();
+  }, [userId]);
 
   // Update phone number
   const handlePhoneSave = async () => {
@@ -107,15 +132,82 @@ const Settings = () => {
     }
   };
 
+  // =========================
+  // PASSKEY ACTIONS
+  // =========================
+  const handleCreatePasskey = async () => {
+    if (!userId) return alert("Please log in again");
+
+    try {
+      setPasskeyStatus("working");
+
+      const optRes = await fetch("http://localhost:3000/webauthn/register/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const options = await optRes.json();
+      if (!optRes.ok) throw new Error(options.error || "Failed to start passkey");
+
+      const attResp = await startRegistration(options);
+
+      const verRes = await fetch("http://localhost:3000/webauthn/register/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, attResp }),
+      });
+      const result = await verRes.json();
+      if (!verRes.ok) throw new Error(result.error || "Passkey verification failed");
+
+      setHasPasskey(true);
+      alert("Passkey created successfully!");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Passkey setup failed");
+    } finally {
+      setPasskeyStatus("idle");
+    }
+  };
+
+  const handleLoginWithPasskey = async () => {
+    if (!userId) return alert("Please log in again");
+
+    try {
+      setPasskeyStatus("working");
+
+      const optRes = await fetch("http://localhost:3000/webauthn/login/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const options = await optRes.json();
+      if (!optRes.ok) throw new Error(options.error || "Failed to start passkey login");
+
+      const asseResp = await startAuthentication(options);
+
+      const verRes = await fetch("http://localhost:3000/webauthn/login/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, asseResp }),
+      });
+      const result = await verRes.json();
+      if (!verRes.ok) throw new Error(result.error || "Passkey login failed");
+
+      alert("Passkey verified successfully on this device!");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Passkey verification failed");
+    } finally {
+      setPasskeyStatus("idle");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100">
       <div className="max-w-5xl mx-auto py-10 px-6">
         {/* Back button */}
         <div className="flex justify-end mb-4">
-          <button
-            onClick={() => navigate("/home")}
-            className="btn btn-outline btn-accent"
-          >
+          <button onClick={() => navigate("/home")} className="btn btn-outline btn-accent">
             Back to Dashboard
           </button>
         </div>
@@ -125,8 +217,12 @@ const Settings = () => {
         {/* Personal Details */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Personal Details</h2>
-          <p><strong>Username:</strong> {user.username}</p>
-          <p><strong>Email:</strong> {user.email}</p>
+          <p>
+            <strong>Username:</strong> {user.username}
+          </p>
+          <p>
+            <strong>Email:</strong> {user.email}
+          </p>
           <p>
             <strong>Phone:</strong>{" "}
             {editingPhone ? (
@@ -137,31 +233,56 @@ const Settings = () => {
                   onChange={(e) => setPhoneInput(e.target.value)}
                   className="input input-bordered w-full max-w-sm"
                 />
-                <button
-                  onClick={handlePhoneSave}
-                  className="btn btn-primary ml-2"
-                >
+                <button onClick={handlePhoneSave} className="btn btn-primary ml-2">
                   Save
                 </button>
-                <button
-                  onClick={() => setEditingPhone(false)}
-                  className="btn btn-outline ml-2"
-                >
+                <button onClick={() => setEditingPhone(false)} className="btn btn-outline ml-2">
                   Cancel
                 </button>
               </>
             ) : (
               <>
                 {user.phone || "Not set"}
-                <button
-                  onClick={() => setEditingPhone(true)}
-                  className="btn btn-sm btn-secondary ml-2"
-                >
+                <button onClick={() => setEditingPhone(true)} className="btn btn-sm btn-secondary ml-2">
                   {user.phone ? "Change" : "Add"}
                 </button>
               </>
             )}
           </p>
+        </div>
+
+        {/* Biometrics / Passkeys */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">Biometrics</h2>
+          <p className="text-sm text-gray-600 mb-4">
+          </p>
+
+          <div className="flex flex-wrap gap-3 items-start">
+            <button
+              onClick={handleCreatePasskey}
+              className="btn btn-primary"
+              disabled={passkeyStatus === "working"}
+            >
+              {passkeyStatus === "working"
+                ? "Working..."
+                : hasPasskey
+                ? "Add Another Passkey"
+                : "Create Passkey"}
+            </button>
+
+            <div>
+              <button
+                onClick={handleLoginWithPasskey}
+                className="btn btn-outline btn-primary"
+                disabled={passkeyStatus === "working"}
+              >
+                {passkeyStatus === "working" ? "Working..." : "Verify passkey on this device"}
+              </button>
+
+              <p className="text-sm text-gray-500 mt-2">
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Change Password */}
@@ -189,10 +310,7 @@ const Settings = () => {
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
             />
-            <button
-              onClick={handlePasswordUpdate}
-              className="btn btn-primary mt-2"
-            >
+            <button onClick={handlePasswordUpdate} className="btn btn-primary mt-2">
               Update Password
             </button>
           </div>
@@ -244,3 +362,6 @@ const Settings = () => {
 };
 
 export default Settings;
+
+
+
