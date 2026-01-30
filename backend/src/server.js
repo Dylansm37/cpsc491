@@ -1,3 +1,4 @@
+import webauthnRoutes from "./routes/webauthn.js";
 import express from "express";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
@@ -28,6 +29,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(webauthnRoutes);
 app.use(authRoutes);
 
 
