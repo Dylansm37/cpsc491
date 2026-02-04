@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema({
   storageUsed: { type: Number, default: 0 },
   storageLimit: { type: Number, default: 1000 },
   twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, default: null },
   accountStatus: { type: String, default: "Active" },
   
   uploads: [
@@ -86,4 +87,3 @@ const userSchema = new mongoose.Schema({
 );
 
 export default mongoose.model("User", userSchema);
-

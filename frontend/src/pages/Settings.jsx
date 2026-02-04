@@ -36,8 +36,19 @@ const Settings = () => {
   // =========================
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [loginAlerts, setLoginAlerts] = useState(true);
-  const [twoFactorAuth, setTwoFactorAuth] = useState(true);
+  const [twoFactorAuth, setTwoFactorAuth] = useState(false);
   const [dataEncryption, setDataEncryption] = useState(true);
+
+  // =========================
+  // TWO-FACTOR AUTH (TOTP)
+  // =========================
+  const [showTwoFactorSetup, setShowTwoFactorSetup] = useState(false);
+  const [twoFactorQrCode, setTwoFactorQrCode] = useState("");
+  const [twoFactorSecret, setTwoFactorSecret] = useState("");
+  const [twoFactorVerifyCode, setTwoFactorVerifyCode] = useState("");
+  const [twoFactorStatus, setTwoFactorStatus] = useState("idle");
+  const [showDisable2FA, setShowDisable2FA] = useState(false);
+  const [disable2FAPassword, setDisable2FAPassword] = useState("");
 
   // =========================
   // PASSKEYS (WebAuthn)
@@ -62,7 +73,9 @@ const Settings = () => {
 
     const fetchUser = async () => {
       try {
-        const res = await fetchWithAuth(`http://localhost:3000/api/dashboard/${userId}`);
+        const res = await fetchWithAuth(
+          `http://localhost:3000/api/dashboard/${userId}`
+        );
         if (!res.ok) throw new Error("Failed to fetch user data");
 
         const data = await res.json();
@@ -110,11 +123,14 @@ const Settings = () => {
     if (digitsOnly.length !== 10) return alert("Phone number must be 10 digits");
 
     try {
-      const res = await fetchWithAuth(`http://localhost:3000/api/users/${userId}/phone`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: digitsOnly }),
-      });
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/users/${userId}/phone`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: digitsOnly }),
+        }
+      );
 
       if (res.status === 401 || res.status === 403) {
         alert("Session expired. Please log in again.");
@@ -143,11 +159,14 @@ const Settings = () => {
     if (newPassword.length < 6) return alert("Password must be at least 6 characters");
 
     try {
-      const res = await fetchWithAuth(`http://localhost:3000/api/users/${userId}/password`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ oldPassword, newPassword }),
-      });
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/users/${userId}/password`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ oldPassword, newPassword }),
+        }
+      );
 
       if (res.status === 401 || res.status === 403) {
         alert("Session expired. Please log in again.");
@@ -169,7 +188,7 @@ const Settings = () => {
   };
 
   // =========================
-  // PASSKEY STATUS
+  // PASSKEY HANDLERS
   // =========================
   useEffect(() => {
     if (!userId) return;
@@ -188,9 +207,6 @@ const Settings = () => {
     checkPasskey();
   }, [userId]);
 
-  // =========================
-  // CREATE PASSKEY
-  // =========================
   const handleCreatePasskey = async () => {
     if (!userId) return alert("Please log in again");
 
@@ -202,7 +218,6 @@ const Settings = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
       });
-
       const options = await optRes.json();
       if (!optRes.ok) throw new Error(options.error || "Failed to start passkey");
 
@@ -213,7 +228,6 @@ const Settings = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, attResp }),
       });
-
       const result = await verRes.json();
       if (!verRes.ok) throw new Error(result.error || "Passkey verification failed");
 
@@ -227,48 +241,34 @@ const Settings = () => {
     }
   };
 
-  // =========================
-  // DELETE PASSKEYS (WITH VERIFICATION)
-  // =========================
-  const handleDeletePasskeys = async () => {
+  const handleLoginWithPasskey = async () => {
     if (!userId) return alert("Please log in again");
-
-    const ok = window.confirm(
-      "To delete passkeys, you'll need to verify with Face ID / Windows Hello. Continue?"
-    );
-    if (!ok) return;
 
     try {
       setPasskeyStatus("working");
 
-      // 1) Get authentication options
-      const optRes = await fetch("http://localhost:3000/webauthn/delete/options", {
+      const optRes = await fetch("http://localhost:3000/webauthn/login/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
       });
-
       const options = await optRes.json();
-      if (!optRes.ok) throw new Error(options.error || "Failed to start verification");
+      if (!optRes.ok) throw new Error(options.error || "Failed to start passkey login");
 
-      // 2) Prompt user (Face ID / Windows Hello / PIN)
       const asseResp = await startAuthentication(options);
 
-      // 3) Verify + delete on server
-      const verRes = await fetch("http://localhost:3000/webauthn/delete/verify", {
+      const verRes = await fetch("http://localhost:3000/webauthn/login/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, asseResp }),
       });
-
       const result = await verRes.json();
-      if (!verRes.ok) throw new Error(result.error || "Delete failed");
+      if (!verRes.ok) throw new Error(result.error || "Passkey login failed");
 
-      setHasPasskey(false);
-      alert("Passkeys deleted.");
+      alert("Passkey verified successfully on this device!");
     } catch (err) {
       console.error(err);
-      alert(err.message || "Delete failed");
+      alert(err.message || "Passkey verification failed");
     } finally {
       setPasskeyStatus("idle");
     }
@@ -307,6 +307,117 @@ const Settings = () => {
   };
 
   // =========================
+  // 2FA HANDLERS
+  // =========================
+  const handleSetup2FA = async () => {
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/setup/${userId}`,
+        { method: "POST" }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to setup 2FA");
+      }
+
+      const data = await res.json();
+      setTwoFactorQrCode(data.qrCode);
+      setTwoFactorSecret(data.secret);
+      setShowTwoFactorSetup(true);
+      setTwoFactorStatus("idle");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to setup 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleVerify2FASetup = async () => {
+    if (!twoFactorVerifyCode || twoFactorVerifyCode.length !== 6) {
+      alert("Please enter a valid 6-digit code");
+      return;
+    }
+
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/verify-setup/${userId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            secret: twoFactorSecret,
+            token: twoFactorVerifyCode,
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Verification failed");
+      }
+
+      setTwoFactorAuth(true);
+      setShowTwoFactorSetup(false);
+      setTwoFactorQrCode("");
+      setTwoFactorSecret("");
+      setTwoFactorVerifyCode("");
+      setTwoFactorStatus("idle");
+      alert("Two-Factor Authentication enabled successfully!");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to verify 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleDisable2FA = async () => {
+    if (!disable2FAPassword) {
+      alert("Please enter your password");
+      return;
+    }
+
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/disable/${userId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: disable2FAPassword }),
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to disable 2FA");
+      }
+
+      setTwoFactorAuth(false);
+      setShowDisable2FA(false);
+      setDisable2FAPassword("");
+      setTwoFactorStatus("idle");
+      alert("Two-Factor Authentication disabled");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to disable 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleCancel2FASetup = () => {
+    setShowTwoFactorSetup(false);
+    setTwoFactorQrCode("");
+    setTwoFactorSecret("");
+    setTwoFactorVerifyCode("");
+  };
+
+  // =========================
   // RENDER
   // =========================
   if (loading) {
@@ -329,7 +440,6 @@ const Settings = () => {
           <h2 className="text-xl font-semibold mb-4">Personal Details</h2>
           <p><strong>Username:</strong> {user.username}</p>
           <p><strong>Email:</strong> {user.email}</p>
-
           <div>
             <strong>Phone:</strong>{" "}
             {editingPhone ? (
@@ -343,20 +453,10 @@ const Settings = () => {
                   maxLength={10}
                 />
                 <div className="mt-2">
-                  <button
-                    onClick={handlePhoneSave}
-                    className="btn btn-primary"
-                    disabled={phoneInput.length !== 10}
-                  >
+                  <button onClick={handlePhoneSave} className="btn btn-primary" disabled={phoneInput.length !== 10}>
                     Save
                   </button>
-                  <button
-                    onClick={() => {
-                      setEditingPhone(false);
-                      setPhoneInput(user.phone || "");
-                    }}
-                    className="btn btn-outline ml-2"
-                  >
+                  <button onClick={() => { setEditingPhone(false); setPhoneInput(user.phone || ""); }} className="btn btn-outline ml-2">
                     Cancel
                   </button>
                 </div>
@@ -364,10 +464,7 @@ const Settings = () => {
             ) : (
               <>
                 {user.phone ? formatPhoneNumber(user.phone) : "Not set"}
-                <button
-                  onClick={() => setEditingPhone(true)}
-                  className="btn btn-sm btn-secondary ml-2"
-                >
+                <button onClick={() => setEditingPhone(true)} className="btn btn-sm btn-secondary ml-2">
                   {user.phone ? "Change" : "Add"}
                 </button>
               </>
@@ -378,13 +475,8 @@ const Settings = () => {
         {/* PASSKEYS */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Biometrics / Passkeys</h2>
-
           <div className="flex flex-wrap gap-3 items-start">
-            <button
-              onClick={handleCreatePasskey}
-              className="btn btn-primary"
-              disabled={passkeyStatus === "working"}
-            >
+            <button onClick={handleCreatePasskey} className="btn btn-primary" disabled={passkeyStatus === "working"}>
               {passkeyStatus === "working"
                 ? "Working..."
                 : hasPasskey
@@ -392,45 +484,19 @@ const Settings = () => {
                 : "Create Passkey"}
             </button>
 
-            <button
-              onClick={handleDeletePasskeys}
-              className="btn btn-error"
-              disabled={passkeyStatus === "working" || !hasPasskey}
-            >
-              {passkeyStatus === "working" ? "Working..." : "Delete Passkeys"}
+            <button onClick={handleLoginWithPasskey} className="btn btn-outline btn-primary" disabled={passkeyStatus === "working"}>
+              {passkeyStatus === "working" ? "Working..." : "Verify passkey on this device"}
             </button>
           </div>
-
-          <p className="text-sm text-gray-500 mt-3">
-            {hasPasskey ? "Passkey is saved on this account." : "No passkey saved yet."}
-          </p>
         </div>
 
         {/* PASSWORD CHANGE */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Change Password</h2>
           <div className="flex flex-col gap-3 max-w-md">
-            <input
-              type="password"
-              placeholder="Current password"
-              className="input input-bordered w-full"
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-            />
-            <input
-              type="password"
-              placeholder="New password (min 6 chars)"
-              className="input input-bordered w-full"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-            <input
-              type="password"
-              placeholder="Confirm new password"
-              className="input input-bordered w-full"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
+            <input type="password" placeholder="Current password" className="input input-bordered w-full" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
+            <input type="password" placeholder="New password (min 6 chars)" className="input input-bordered w-full" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+            <input type="password" placeholder="Confirm new password" className="input input-bordered w-full" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
 
             {newPassword && confirmPassword && (
               <p style={{ color: newPassword === confirmPassword ? "green" : "red", fontSize: "0.875rem" }}>
@@ -438,92 +504,177 @@ const Settings = () => {
               </p>
             )}
 
-            <button onClick={handlePasswordUpdate} className="btn btn-primary mt-2">
-              Update Password
-            </button>
+            <button onClick={handlePasswordUpdate} className="btn btn-primary mt-2">Update Password</button>
           </div>
         </div>
 
-        {/* SECURITY SETTINGS */}
+        {/* TWO-FACTOR AUTHENTICATION */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Security Settings</h2>
+          <h2 className="text-xl font-semibold mb-4">Two-Factor Authentication</h2>
+
+          {!showTwoFactorSetup && !showDisable2FA ? (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="font-medium">
+                    Status:{" "}
+                    {twoFactorAuth ? (
+                      <span className="text-green-600">Enabled</span>
+                    ) : (
+                      <span className="text-gray-500">Disabled</span>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {twoFactorAuth
+                      ? "Your account is protected with an authenticator app."
+                      : "Add an extra layer of security to your account."}
+                  </p>
+                </div>
+                {twoFactorAuth ? (
+                  <button
+                    onClick={() => setShowDisable2FA(true)}
+                    className="btn btn-outline btn-error"
+                    disabled={twoFactorStatus === "loading"}
+                  >
+                    Disable 2FA
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSetup2FA}
+                    className="btn btn-primary"
+                    disabled={twoFactorStatus === "loading"}
+                  >
+                    {twoFactorStatus === "loading" ? "Loading..." : "Enable 2FA"}
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : showTwoFactorSetup ? (
+            <div className="space-y-4">
+              <h3 className="font-medium">Setup Two-Factor Authentication</h3>
+
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <p className="text-sm text-gray-600 mb-3">
+                  1. Install an authenticator app (Google Authenticator, Authy, etc.)
+                </p>
+                <p className="text-sm text-gray-600 mb-3">
+                  2. Scan this QR code with your authenticator app:
+                </p>
+
+                {twoFactorQrCode && (
+                  <div className="flex justify-center my-4">
+                    <img src={twoFactorQrCode} alt="2FA QR Code" className="border rounded" />
+                  </div>
+                )}
+
+                <p className="text-sm text-gray-600 mb-2">Or enter this code manually:</p>
+                <code className="block bg-gray-200 p-2 rounded text-sm break-all">
+                  {twoFactorSecret}
+                </code>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-600 mb-2">
+                  3. Enter the 6-digit code from your authenticator app:
+                </p>
+                <input
+                  type="text"
+                  value={twoFactorVerifyCode}
+                  onChange={(e) =>
+                    setTwoFactorVerifyCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  placeholder="Enter 6-digit code"
+                  className="input input-bordered w-full max-w-xs"
+                  maxLength={6}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleVerify2FASetup}
+                  className="btn btn-primary"
+                  disabled={twoFactorVerifyCode.length !== 6 || twoFactorStatus === "loading"}
+                >
+                  {twoFactorStatus === "loading" ? "Verifying..." : "Verify & Enable"}
+                </button>
+                <button
+                  onClick={handleCancel2FASetup}
+                  className="btn btn-outline"
+                  disabled={twoFactorStatus === "loading"}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <h3 className="font-medium text-red-600">Disable Two-Factor Authentication</h3>
+              <p className="text-sm text-gray-600">Enter your password to confirm disabling 2FA:</p>
+              <input
+                type="password"
+                value={disable2FAPassword}
+                onChange={(e) => setDisable2FAPassword(e.target.value)}
+                placeholder="Enter your password"
+                className="input input-bordered w-full max-w-xs"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDisable2FA}
+                  className="btn btn-error"
+                  disabled={!disable2FAPassword || twoFactorStatus === "loading"}
+                >
+                  {twoFactorStatus === "loading" ? "Disabling..." : "Disable 2FA"}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDisable2FA(false);
+                    setDisable2FAPassword("");
+                  }}
+                  className="btn btn-outline"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* OTHER SECURITY SETTINGS */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">Other Security Settings</h2>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={twoFactorAuth}
-              onChange={() => setTwoFactorAuth(!twoFactorAuth)}
-              className="checkbox checkbox-primary"
-            />
-            <span>Enable Two-Factor Authentication</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={loginAlerts}
-              onChange={() => setLoginAlerts(!loginAlerts)}
-              className="checkbox checkbox-primary"
-            />
+            <input type="checkbox" checked={loginAlerts} onChange={() => setLoginAlerts(!loginAlerts)} className="checkbox checkbox-primary" />
             <span>Login Alerts</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={emailNotifications}
-              onChange={() => setEmailNotifications(!emailNotifications)}
-              className="checkbox checkbox-primary"
-            />
+            <input type="checkbox" checked={emailNotifications} onChange={() => setEmailNotifications(!emailNotifications)} className="checkbox checkbox-primary" />
             <span>Email Notifications</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dataEncryption}
-              onChange={() => setDataEncryption(!dataEncryption)}
-              className="checkbox checkbox-primary"
-            />
+            <input type="checkbox" checked={dataEncryption} onChange={() => setDataEncryption(!dataEncryption)} className="checkbox checkbox-primary" />
             <span>Enable Data Encryption</span>
           </label>
-          <p className="text-sm text-gray-500 mt-4">
-            Note: Security preferences are currently for display only. Backend integration coming soon.
-          </p>
+          <p className="text-sm text-gray-500 mt-4">Note: These preferences are currently for display only.</p>
         </div>
 
         {/* DEVICE AUTH */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Device Authentication</h2>
           <label className="flex items-center gap-2 cursor-pointer mb-4">
-            <input
-              type="checkbox"
-              checked={deviceAuthEnabled}
-              onChange={handleDeviceAuthToggle}
-              className="checkbox checkbox-primary"
-            />
+            <input type="checkbox" checked={deviceAuthEnabled} onChange={handleDeviceAuthToggle} className="checkbox checkbox-primary" />
             <span className="font-medium">Enable Device Authentication</span>
           </label>
-
           {deviceAuthEnabled && trustedDevices.length > 0 ? (
             <div className="space-y-3">
               {trustedDevices.map((device) => (
-                <div
-                  key={device.deviceToken}
-                  className="flex justify-between items-center border border-gray-200 rounded-lg p-4"
-                >
+                <div key={device.deviceToken} className="flex justify-between items-center border border-gray-200 rounded-lg p-4">
                   <div>
                     <p className="font-medium">{device.deviceName || "Unknown Device"}</p>
-                    <p className="text-sm text-gray-500">
-                      Added: {device.trustedAt ? new Date(device.trustedAt).toLocaleDateString() : "Unknown"}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      Last used: {device.lastUsed ? new Date(device.lastUsed).toLocaleDateString() : "Unknown"}
-                    </p>
+                    <p className="text-sm text-gray-500">Added: {new Date(device.trustedAt).toLocaleDateString()}</p>
+                    <p className="text-sm text-gray-500">Last used: {new Date(device.lastUsed).toLocaleDateString()}</p>
                     <p className="text-xs text-gray-400 mt-1">IP: {device.ipAddress || "Unknown"}</p>
                   </div>
-                  <button
-                    onClick={() => handleRemoveDevice(device.deviceToken)}
-                    className="btn btn-sm btn-outline btn-error"
-                  >
-                    Remove
-                  </button>
+                  <button onClick={() => handleRemoveDevice(device.deviceToken)} className="btn btn-sm btn-outline btn-error">Remove</button>
                 </div>
               ))}
             </div>
