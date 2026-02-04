@@ -62,9 +62,7 @@ const Settings = () => {
 
     const fetchUser = async () => {
       try {
-        const res = await fetchWithAuth(
-          `http://localhost:3000/api/dashboard/${userId}`
-        );
+        const res = await fetchWithAuth(`http://localhost:3000/api/dashboard/${userId}`);
         if (!res.ok) throw new Error("Failed to fetch user data");
 
         const data = await res.json();
@@ -112,14 +110,11 @@ const Settings = () => {
     if (digitsOnly.length !== 10) return alert("Phone number must be 10 digits");
 
     try {
-      const res = await fetchWithAuth(
-        `http://localhost:3000/api/users/${userId}/phone`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: digitsOnly }),
-        }
-      );
+      const res = await fetchWithAuth(`http://localhost:3000/api/users/${userId}/phone`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: digitsOnly }),
+      });
 
       if (res.status === 401 || res.status === 403) {
         alert("Session expired. Please log in again.");
@@ -148,14 +143,11 @@ const Settings = () => {
     if (newPassword.length < 6) return alert("Password must be at least 6 characters");
 
     try {
-      const res = await fetchWithAuth(
-        `http://localhost:3000/api/users/${userId}/password`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ oldPassword, newPassword }),
-        }
-      );
+      const res = await fetchWithAuth(`http://localhost:3000/api/users/${userId}/password`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldPassword, newPassword }),
+      });
 
       if (res.status === 401 || res.status === 403) {
         alert("Session expired. Please log in again.");
@@ -177,7 +169,7 @@ const Settings = () => {
   };
 
   // =========================
-  // PASSKEY HANDLERS
+  // PASSKEY STATUS
   // =========================
   useEffect(() => {
     if (!userId) return;
@@ -196,6 +188,9 @@ const Settings = () => {
     checkPasskey();
   }, [userId]);
 
+  // =========================
+  // CREATE PASSKEY
+  // =========================
   const handleCreatePasskey = async () => {
     if (!userId) return alert("Please log in again");
 
@@ -207,6 +202,7 @@ const Settings = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
       });
+
       const options = await optRes.json();
       if (!optRes.ok) throw new Error(options.error || "Failed to start passkey");
 
@@ -217,6 +213,7 @@ const Settings = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, attResp }),
       });
+
       const result = await verRes.json();
       if (!verRes.ok) throw new Error(result.error || "Passkey verification failed");
 
@@ -230,34 +227,48 @@ const Settings = () => {
     }
   };
 
-  const handleLoginWithPasskey = async () => {
+  // =========================
+  // DELETE PASSKEYS (WITH VERIFICATION)
+  // =========================
+  const handleDeletePasskeys = async () => {
     if (!userId) return alert("Please log in again");
+
+    const ok = window.confirm(
+      "To delete passkeys, you'll need to verify with Face ID / Windows Hello. Continue?"
+    );
+    if (!ok) return;
 
     try {
       setPasskeyStatus("working");
 
-      const optRes = await fetch("http://localhost:3000/webauthn/login/options", {
+      // 1) Get authentication options
+      const optRes = await fetch("http://localhost:3000/webauthn/delete/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
       });
-      const options = await optRes.json();
-      if (!optRes.ok) throw new Error(options.error || "Failed to start passkey login");
 
+      const options = await optRes.json();
+      if (!optRes.ok) throw new Error(options.error || "Failed to start verification");
+
+      // 2) Prompt user (Face ID / Windows Hello / PIN)
       const asseResp = await startAuthentication(options);
 
-      const verRes = await fetch("http://localhost:3000/webauthn/login/verify", {
+      // 3) Verify + delete on server
+      const verRes = await fetch("http://localhost:3000/webauthn/delete/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, asseResp }),
       });
-      const result = await verRes.json();
-      if (!verRes.ok) throw new Error(result.error || "Passkey login failed");
 
-      alert("Passkey verified successfully on this device!");
+      const result = await verRes.json();
+      if (!verRes.ok) throw new Error(result.error || "Delete failed");
+
+      setHasPasskey(false);
+      alert("Passkeys deleted.");
     } catch (err) {
       console.error(err);
-      alert(err.message || "Passkey verification failed");
+      alert(err.message || "Delete failed");
     } finally {
       setPasskeyStatus("idle");
     }
@@ -318,6 +329,7 @@ const Settings = () => {
           <h2 className="text-xl font-semibold mb-4">Personal Details</h2>
           <p><strong>Username:</strong> {user.username}</p>
           <p><strong>Email:</strong> {user.email}</p>
+
           <div>
             <strong>Phone:</strong>{" "}
             {editingPhone ? (
@@ -331,10 +343,20 @@ const Settings = () => {
                   maxLength={10}
                 />
                 <div className="mt-2">
-                  <button onClick={handlePhoneSave} className="btn btn-primary" disabled={phoneInput.length !== 10}>
+                  <button
+                    onClick={handlePhoneSave}
+                    className="btn btn-primary"
+                    disabled={phoneInput.length !== 10}
+                  >
                     Save
                   </button>
-                  <button onClick={() => { setEditingPhone(false); setPhoneInput(user.phone || ""); }} className="btn btn-outline ml-2">
+                  <button
+                    onClick={() => {
+                      setEditingPhone(false);
+                      setPhoneInput(user.phone || "");
+                    }}
+                    className="btn btn-outline ml-2"
+                  >
                     Cancel
                   </button>
                 </div>
@@ -342,7 +364,10 @@ const Settings = () => {
             ) : (
               <>
                 {user.phone ? formatPhoneNumber(user.phone) : "Not set"}
-                <button onClick={() => setEditingPhone(true)} className="btn btn-sm btn-secondary ml-2">
+                <button
+                  onClick={() => setEditingPhone(true)}
+                  className="btn btn-sm btn-secondary ml-2"
+                >
                   {user.phone ? "Change" : "Add"}
                 </button>
               </>
@@ -353,8 +378,13 @@ const Settings = () => {
         {/* PASSKEYS */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Biometrics / Passkeys</h2>
+
           <div className="flex flex-wrap gap-3 items-start">
-            <button onClick={handleCreatePasskey} className="btn btn-primary" disabled={passkeyStatus === "working"}>
+            <button
+              onClick={handleCreatePasskey}
+              className="btn btn-primary"
+              disabled={passkeyStatus === "working"}
+            >
               {passkeyStatus === "working"
                 ? "Working..."
                 : hasPasskey
@@ -362,19 +392,45 @@ const Settings = () => {
                 : "Create Passkey"}
             </button>
 
-            <button onClick={handleLoginWithPasskey} className="btn btn-outline btn-primary" disabled={passkeyStatus === "working"}>
-              {passkeyStatus === "working" ? "Working..." : "Verify passkey on this device"}
+            <button
+              onClick={handleDeletePasskeys}
+              className="btn btn-error"
+              disabled={passkeyStatus === "working" || !hasPasskey}
+            >
+              {passkeyStatus === "working" ? "Working..." : "Delete Passkeys"}
             </button>
           </div>
+
+          <p className="text-sm text-gray-500 mt-3">
+            {hasPasskey ? "Passkey is saved on this account." : "No passkey saved yet."}
+          </p>
         </div>
 
         {/* PASSWORD CHANGE */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Change Password</h2>
           <div className="flex flex-col gap-3 max-w-md">
-            <input type="password" placeholder="Current password" className="input input-bordered w-full" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
-            <input type="password" placeholder="New password (min 6 chars)" className="input input-bordered w-full" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-            <input type="password" placeholder="Confirm new password" className="input input-bordered w-full" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+            <input
+              type="password"
+              placeholder="Current password"
+              className="input input-bordered w-full"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+            />
+            <input
+              type="password"
+              placeholder="New password (min 6 chars)"
+              className="input input-bordered w-full"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+            <input
+              type="password"
+              placeholder="Confirm new password"
+              className="input input-bordered w-full"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
 
             {newPassword && confirmPassword && (
               <p style={{ color: newPassword === confirmPassword ? "green" : "red", fontSize: "0.875rem" }}>
@@ -382,7 +438,9 @@ const Settings = () => {
               </p>
             )}
 
-            <button onClick={handlePasswordUpdate} className="btn btn-primary mt-2">Update Password</button>
+            <button onClick={handlePasswordUpdate} className="btn btn-primary mt-2">
+              Update Password
+            </button>
           </div>
         </div>
 
@@ -390,42 +448,82 @@ const Settings = () => {
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Security Settings</h2>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={twoFactorAuth} onChange={() => setTwoFactorAuth(!twoFactorAuth)} className="checkbox checkbox-primary" />
+            <input
+              type="checkbox"
+              checked={twoFactorAuth}
+              onChange={() => setTwoFactorAuth(!twoFactorAuth)}
+              className="checkbox checkbox-primary"
+            />
             <span>Enable Two-Factor Authentication</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={loginAlerts} onChange={() => setLoginAlerts(!loginAlerts)} className="checkbox checkbox-primary" />
+            <input
+              type="checkbox"
+              checked={loginAlerts}
+              onChange={() => setLoginAlerts(!loginAlerts)}
+              className="checkbox checkbox-primary"
+            />
             <span>Login Alerts</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={emailNotifications} onChange={() => setEmailNotifications(!emailNotifications)} className="checkbox checkbox-primary" />
+            <input
+              type="checkbox"
+              checked={emailNotifications}
+              onChange={() => setEmailNotifications(!emailNotifications)}
+              className="checkbox checkbox-primary"
+            />
             <span>Email Notifications</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={dataEncryption} onChange={() => setDataEncryption(!dataEncryption)} className="checkbox checkbox-primary" />
+            <input
+              type="checkbox"
+              checked={dataEncryption}
+              onChange={() => setDataEncryption(!dataEncryption)}
+              className="checkbox checkbox-primary"
+            />
             <span>Enable Data Encryption</span>
           </label>
-          <p className="text-sm text-gray-500 mt-4">Note: Security preferences are currently for display only. Backend integration coming soon.</p>
+          <p className="text-sm text-gray-500 mt-4">
+            Note: Security preferences are currently for display only. Backend integration coming soon.
+          </p>
         </div>
 
         {/* DEVICE AUTH */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Device Authentication</h2>
           <label className="flex items-center gap-2 cursor-pointer mb-4">
-            <input type="checkbox" checked={deviceAuthEnabled} onChange={handleDeviceAuthToggle} className="checkbox checkbox-primary" />
+            <input
+              type="checkbox"
+              checked={deviceAuthEnabled}
+              onChange={handleDeviceAuthToggle}
+              className="checkbox checkbox-primary"
+            />
             <span className="font-medium">Enable Device Authentication</span>
           </label>
+
           {deviceAuthEnabled && trustedDevices.length > 0 ? (
             <div className="space-y-3">
               {trustedDevices.map((device) => (
-                <div key={device.deviceToken} className="flex justify-between items-center border border-gray-200 rounded-lg p-4">
+                <div
+                  key={device.deviceToken}
+                  className="flex justify-between items-center border border-gray-200 rounded-lg p-4"
+                >
                   <div>
                     <p className="font-medium">{device.deviceName || "Unknown Device"}</p>
-                    <p className="text-sm text-gray-500">Added: {new Date(device.trustedAt).toLocaleDateString()}</p>
-                    <p className="text-sm text-gray-500">Last used: {new Date(device.lastUsed).toLocaleDateString()}</p>
+                    <p className="text-sm text-gray-500">
+                      Added: {device.trustedAt ? new Date(device.trustedAt).toLocaleDateString() : "Unknown"}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Last used: {device.lastUsed ? new Date(device.lastUsed).toLocaleDateString() : "Unknown"}
+                    </p>
                     <p className="text-xs text-gray-400 mt-1">IP: {device.ipAddress || "Unknown"}</p>
                   </div>
-                  <button onClick={() => handleRemoveDevice(device.deviceToken)} className="btn btn-sm btn-outline btn-error">Remove</button>
+                  <button
+                    onClick={() => handleRemoveDevice(device.deviceToken)}
+                    className="btn btn-sm btn-outline btn-error"
+                  >
+                    Remove
+                  </button>
                 </div>
               ))}
             </div>

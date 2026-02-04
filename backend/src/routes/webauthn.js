@@ -1,3 +1,4 @@
+// src/routes/webauthn.js
 import express from "express";
 import {
   generateRegistrationOptions,
@@ -13,16 +14,38 @@ const rpName = process.env.RP_NAME || "GuardFile";
 const rpID = process.env.RP_ID || "localhost";
 const origin = process.env.ORIGIN || "http://localhost:5173";
 
-// ---- base64url helpers (store as strings in MongoDB) ----
+/* =========================================================================
+   BASE64URL HELPERS (safe for Mongo Buffer objects too)
+   ========================================================================= */
+
 function toBase64URL(input) {
-  // If it's already a base64url string, keep it
-  if (typeof input === "string") return input;
+  if (!input) return "";
+
+  // already base64url / base64 string
+  if (typeof input === "string") {
+    // normalize classic base64 -> base64url if needed
+    if (input.includes("+") || input.includes("/") || input.includes("=")) {
+      try {
+        return Buffer.from(input, "base64").toString("base64url");
+      } catch {
+        return input;
+      }
+    }
+    return input;
+  }
 
   // Buffer
   if (Buffer.isBuffer(input)) return input.toString("base64url");
 
+  // Mongo can store Buffers like: { type: "Buffer", data: [...] }
+  if (typeof input === "object" && input.type === "Buffer" && Array.isArray(input.data)) {
+    return Buffer.from(input.data).toString("base64url");
+  }
+
   // ArrayBuffer
-  if (input instanceof ArrayBuffer) return Buffer.from(new Uint8Array(input)).toString("base64url");
+  if (input instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(input)).toString("base64url");
+  }
 
   // Uint8Array / array-like
   if (input && typeof input === "object" && typeof input.length === "number") {
@@ -34,8 +57,31 @@ function toBase64URL(input) {
 
 function fromBase64URL(str) {
   if (typeof str !== "string") return Buffer.alloc(0);
-  return Buffer.from(str, "base64url");
+  try {
+    return Buffer.from(str, "base64url");
+  } catch {
+    return Buffer.alloc(0);
+  }
 }
+
+// Some browsers return credential IDs as base64url; normalize for consistent matching
+function normalizeCredId(id) {
+  if (!id) return "";
+  return String(id).replace(/=+$/g, ""); // remove padding just in case
+}
+
+function getStoredCredIdString(c) {
+  return normalizeCredId(toBase64URL(c?.credentialID));
+}
+
+function getStoredPubKeyString(c) {
+  // supports either field name + any type (string/buffer/object)
+  return toBase64URL(c?.publicKey || c?.credentialPublicKey);
+}
+
+/* =========================================================================
+   ROUTES
+   ========================================================================= */
 
 // ✅ status: does user have any passkey saved?
 router.get("/webauthn/status/:userId", async (req, res) => {
@@ -43,13 +89,14 @@ router.get("/webauthn/status/:userId", async (req, res) => {
     const user = await User.findById(req.params.userId).select("webauthnCredentials");
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // ✅ ADD: only count valid creds
-    const creds = (user.webauthnCredentials || []).filter(
-      (c) => c && typeof c.credentialID === "string" && c.credentialID.length > 0 && typeof c.publicKey === "string"
-    );
+    const creds = (user.webauthnCredentials || [])
+      .map((c) => ({
+        id: getStoredCredIdString(c),
+        pk: getStoredPubKeyString(c),
+      }))
+      .filter((c) => c.id && c.pk);
 
-    const hasPasskey = creds.length > 0;
-    res.json({ hasPasskey });
+    res.json({ hasPasskey: creds.length > 0 });
   } catch (e) {
     res.status(500).json({ error: "Server error" });
   }
@@ -64,18 +111,21 @@ router.post("/webauthn/register/options", async (req, res) => {
     const user = await User.findById(userId).select("email username webauthnCredentials currentChallenge");
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // ✅ ADD: ensure array exists (older users may not have this field yet)
     if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
 
-    // ✅ FIX: SimpleWebAuthn expects base64url STRING ids here (not Buffers)
-    // ✅ Also skip any bad/old entries
+    // exclude existing creds (string base64url)
     const excludeCredentials = (user.webauthnCredentials || [])
-      .filter((c) => c && typeof c.credentialID === "string" && c.credentialID.length > 0)
-      .map((c) => ({
-        id: c.credentialID, // ✅ string (base64url)
-        type: "public-key",
-        transports: c.transports || [],
-      }));
+      .map((c) => {
+        const idStr = getStoredCredIdString(c);
+        return idStr
+          ? {
+              id: idStr,
+              type: "public-key",
+              transports: c?.transports || [],
+            }
+          : null;
+      })
+      .filter(Boolean);
 
     const options = await generateRegistrationOptions({
       rpName,
@@ -111,7 +161,6 @@ router.post("/webauthn/register/verify", async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
     if (!user.currentChallenge) return res.status(400).json({ error: "No challenge found. Restart registration." });
 
-    // ✅ ADD: ensure array exists (older users may not have this field yet)
     if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
 
     const verification = await verifyRegistrationResponse({
@@ -127,7 +176,7 @@ router.post("/webauthn/register/verify", async (req, res) => {
       return res.status(400).json({ error: "Registration not verified" });
     }
 
-    // ✅ ADD: compatible extraction across SimpleWebAuthn versions
+    // Compatible extraction across SimpleWebAuthn versions
     const credentialID =
       registrationInfo.credentialID ??
       registrationInfo.credential?.id ??
@@ -140,24 +189,24 @@ router.post("/webauthn/register/verify", async (req, res) => {
 
     const counter = registrationInfo.counter ?? registrationInfo.credential?.counter ?? 0;
 
-    // ✅ ADD: guard before Buffer.from(...) (fixes crash)
     if (!credentialID || !credentialPublicKey) {
       console.error("Missing credential fields:", { registrationInfo });
       return res.status(400).json({ error: "Missing credential fields from WebAuthn registrationInfo" });
     }
 
-    // ✅ ADD: transports can be in different places depending on browser/lib
     const transports = attResp?.transports || attResp?.response?.transports || [];
 
     const newCred = {
-      credentialID: toBase64URL(credentialID),          // ✅ safe now
-      publicKey: toBase64URL(credentialPublicKey),      // ✅ safe now
-      counter: counter || 0,
+      credentialID: normalizeCredId(toBase64URL(credentialID)),
+      publicKey: toBase64URL(credentialPublicKey),
+      counter: Number(counter) || 0,
       transports,
       createdAt: new Date(),
     };
 
-    const exists = (user.webauthnCredentials || []).some((c) => c.credentialID === newCred.credentialID);
+    const exists = (user.webauthnCredentials || []).some(
+      (c) => getStoredCredIdString(c) === newCred.credentialID
+    );
     if (!exists) user.webauthnCredentials.push(newCred);
 
     user.currentChallenge = null;
@@ -179,18 +228,20 @@ router.post("/webauthn/login/options", async (req, res) => {
     const user = await User.findById(userId).select("webauthnCredentials currentChallenge");
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // ✅ ADD: ensure array exists
     if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
 
-    // ✅ FIX: SimpleWebAuthn expects base64url STRING ids here (not Buffers)
-    // ✅ Also skip any bad/old entries
     const allowCredentials = (user.webauthnCredentials || [])
-      .filter((c) => c && typeof c.credentialID === "string" && c.credentialID.length > 0)
-      .map((c) => ({
-        id: c.credentialID, // ✅ string (base64url)
-        type: "public-key",
-        transports: c.transports || [],
-      }));
+      .map((c) => {
+        const idStr = getStoredCredIdString(c);
+        return idStr
+          ? {
+              id: idStr,
+              type: "public-key",
+              transports: c?.transports || [],
+            }
+          : null;
+      })
+      .filter(Boolean);
 
     if (allowCredentials.length === 0) {
       return res.status(400).json({ error: "No passkey found for this account" });
@@ -223,36 +274,207 @@ router.post("/webauthn/login/verify", async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
     if (!user.currentChallenge) return res.status(400).json({ error: "No challenge found. Restart login." });
 
-    // ✅ ADD: ensure array exists
     if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
 
-    const credID = asseResp?.id;
-    const cred = (user.webauthnCredentials || []).find((c) => c.credentialID === credID);
+    const incomingId = normalizeCredId(asseResp?.id);
+
+    const cred = (user.webauthnCredentials || []).find((c) => getStoredCredIdString(c) === incomingId);
     if (!cred) return res.status(400).json({ error: "Unknown credential" });
+
+    const credIdStr = getStoredCredIdString(cred);
+    const pubKeyStr = getStoredPubKeyString(cred);
+
+    const credentialIDBuf = fromBase64URL(credIdStr);
+    const credentialPublicKeyBuf = fromBase64URL(pubKeyStr);
+
+    if (!pubKeyStr || credentialPublicKeyBuf.length === 0) {
+      console.error("Login verify: missing/invalid public key:", {
+        storedId: credIdStr,
+        publicKeyType: typeof cred.publicKey,
+      });
+      user.currentChallenge = null;
+      await user.save();
+      return res.status(400).json({ error: "Passkey data is broken (missing public key). Recreate passkey." });
+    }
 
     const verification = await verifyAuthenticationResponse({
       response: asseResp,
       expectedChallenge: user.currentChallenge,
       expectedOrigin: origin,
       expectedRPID: rpID,
-      authenticator: {
-        credentialID: fromBase64URL(cred.credentialID),
-        credentialPublicKey: fromBase64URL(cred.publicKey),
-        counter: cred.counter || 0,
+      credential: {
+        id: credentialIDBuf,
+        publicKey: credentialPublicKeyBuf,
+        counter: Number(cred.counter) || 0,
       },
       requireUserVerification: false,
     });
 
     const { verified, authenticationInfo } = verification;
-    if (!verified || !authenticationInfo) return res.status(400).json({ error: "Authentication not verified" });
+    if (!verified) return res.status(400).json({ error: "Authentication not verified" });
 
-    cred.counter = authenticationInfo.newCounter;
+    // Update counter if authenticationInfo exists
+    if (authenticationInfo?.newCounter !== undefined) {
+      cred.counter = authenticationInfo.newCounter;
+    }
+    
     user.currentChallenge = null;
     await user.save();
 
     res.json({ message: "Passkey login verified", verified: true });
   } catch (e) {
     console.error("login/verify error:", e);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================================================================
+   DELETE WITH VERIFICATION (Face ID / Windows Hello)
+   ========================================================================= */
+
+// ✅ A) Start delete verification: get options
+router.post("/webauthn/delete/options", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+  try {
+    const user = await User.findById(userId).select("webauthnCredentials currentChallenge");
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
+
+    const allowCredentials = (user.webauthnCredentials || [])
+      .map((c) => {
+        const idStr = getStoredCredIdString(c);
+        return idStr
+          ? {
+              id: idStr,
+              type: "public-key",
+              transports: c?.transports || [],
+            }
+          : null;
+      })
+      .filter(Boolean);
+
+    if (allowCredentials.length === 0) {
+      return res.status(400).json({ error: "No passkey found for this account" });
+    }
+
+    const options = await generateAuthenticationOptions({
+      timeout: 60000,
+      rpID,
+      allowCredentials,
+      userVerification: "preferred",
+    });
+
+    user.currentChallenge = options.challenge;
+    await user.save();
+
+    res.json(options);
+  } catch (e) {
+    console.error("delete/options error:", e);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ✅ B) Verify then delete ALL passkeys
+router.post("/webauthn/delete/verify", async (req, res) => {
+  const { userId, asseResp } = req.body;
+  if (!userId || !asseResp) return res.status(400).json({ error: "Missing userId or asseResp" });
+
+  try {
+    const user = await User.findById(userId).select("webauthnCredentials currentChallenge");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!user.currentChallenge) return res.status(400).json({ error: "No challenge found. Restart delete." });
+
+    if (!Array.isArray(user.webauthnCredentials)) user.webauthnCredentials = [];
+
+    const incomingId = normalizeCredId(asseResp?.id);
+
+    const cred = (user.webauthnCredentials || []).find((c) => getStoredCredIdString(c) === incomingId);
+    if (!cred) {
+      user.currentChallenge = null;
+      await user.save();
+      return res.status(400).json({ error: "Unknown credential. Try again." });
+    }
+
+    const credIdStr = getStoredCredIdString(cred);
+    const pubKeyStr = getStoredPubKeyString(cred);
+
+    const credentialIDBuf = fromBase64URL(credIdStr);
+    const credentialPublicKeyBuf = fromBase64URL(pubKeyStr);
+
+    if (!pubKeyStr || credentialPublicKeyBuf.length === 0) {
+      console.error("Delete verify: missing/invalid public key for credential:", {
+        storedId: credIdStr,
+        hasPublicKeyField: !!cred.publicKey,
+        hasAltField: !!cred.credentialPublicKey,
+        publicKeyType: typeof cred.publicKey,
+      });
+
+      user.currentChallenge = null;
+      await user.save();
+
+      return res.status(400).json({
+        error: "This passkey is broken in the database (missing public key). Use the legacy delete, then recreate a passkey.",
+      });
+    }
+
+    const verification = await verifyAuthenticationResponse({
+      response: asseResp,
+      expectedChallenge: user.currentChallenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      credential: {
+        id: credentialIDBuf,
+        publicKey: credentialPublicKeyBuf,
+        counter: Number(cred.counter) || 0,
+      },
+      requireUserVerification: false,
+    });
+
+    const { verified, authenticationInfo } = verification;
+    if (!verified) {
+      user.currentChallenge = null;
+      await user.save();
+      return res.status(400).json({ error: "Authentication not verified" });
+    }
+
+    // Update counter if authenticationInfo exists
+    if (authenticationInfo?.newCounter !== undefined) {
+      cred.counter = authenticationInfo.newCounter;
+    }
+
+    // ✅ delete all passkeys after verification
+    user.webauthnCredentials = [];
+    user.currentChallenge = null;
+    await user.save();
+
+    res.json({ message: "All passkeys deleted after verification", deleted: true });
+  } catch (e) {
+    console.error("delete/verify error:", e);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================================================================
+   LEGACY DELETE (NO VERIFICATION) - keep for broken/old creds cleanup
+   ========================================================================= */
+router.delete("/webauthn/credentials/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select("webauthnCredentials currentChallenge");
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.webauthnCredentials = [];
+    user.currentChallenge = null;
+
+    await user.save();
+
+    res.json({ message: "All passkeys deleted", deleted: true });
+  } catch (e) {
+    console.error("delete passkeys error:", e);
     res.status(500).json({ error: "Server error" });
   }
 });
