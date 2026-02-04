@@ -13,6 +13,8 @@ import authRoutes from "./routes/auth.js";
 import User from "./models/User.js";
 import dotenv from "dotenv";
 import { nanoid } from "nanoid";
+import speakeasy from "speakeasy";
+import QRCode from "qrcode";
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-CHANGE-THIS-IN-PRODUCTION";
@@ -82,22 +84,31 @@ app.post("/login", async (req, res) => {
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
-    
+
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: "Invalid credentials" });
-    
+
+    // Check if 2FA is enabled
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      return res.json({
+        requiresTwoFactor: true,
+        message: "2FA verification required",
+        email: user.email,
+      });
+    }
+
     // Create JWT token with 10 min expiration
     const token = jwt.sign(
       { userId: user._id, username: user.username },
       JWT_SECRET,
       { expiresIn: '10m' }
     );
-    
-    res.json({ 
-      message: "Login successful", 
+
+    res.json({
+      message: "Login successful",
       token,
-      userId: user._id, 
-      username: user.username 
+      userId: user._id,
+      username: user.username
     });
   } catch (err) {
     res.status(500).json({ error: "Server error" });
@@ -366,6 +377,165 @@ app.patch("/api/users/:userId/device-auth", authenticateToken, async (req, res) 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update setting" });
+  }
+});
+
+// ------------------- TWO-FACTOR AUTHENTICATION -------------------
+
+// SETUP 2FA - Generate secret and QR code
+app.post("/api/2fa/setup/:userId", authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+
+  if (req.user.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized access" });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Generate a new secret
+    const secret = speakeasy.generateSecret({
+      name: `GuardFile:${user.email}`,
+      issuer: "GuardFile",
+      length: 20,
+    });
+
+    // Generate QR code as data URL
+    const qrCodeDataUrl = await QRCode.toDataURL(secret.otpauth_url);
+
+    // Return secret and QR code (don't save yet - user must verify first)
+    res.json({
+      secret: secret.base32,
+      qrCode: qrCodeDataUrl,
+      otpauthUrl: secret.otpauth_url,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to setup 2FA" });
+  }
+});
+
+// VERIFY 2FA SETUP - Confirm code from authenticator works
+app.post("/api/2fa/verify-setup/:userId", authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const { secret, token } = req.body;
+
+  if (req.user.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized access" });
+  }
+
+  if (!secret || !token) {
+    return res.status(400).json({ error: "Secret and token are required" });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Verify the token
+    const verified = speakeasy.totp.verify({
+      secret: secret,
+      encoding: "base32",
+      token: token,
+      window: 1, // Allow 1 step before/after for clock drift
+    });
+
+    if (!verified) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+
+    // Save secret and enable 2FA
+    user.twoFactorSecret = secret;
+    user.twoFactorEnabled = true;
+    await user.save();
+
+    res.json({ message: "2FA enabled successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to verify 2FA setup" });
+  }
+});
+
+// DISABLE 2FA
+app.post("/api/2fa/disable/:userId", authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const { password } = req.body;
+
+  if (req.user.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized access" });
+  }
+
+  if (!password) {
+    return res.status(400).json({ error: "Password is required to disable 2FA" });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Verify password before disabling
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: "Incorrect password" });
+    }
+
+    // Clear 2FA settings
+    user.twoFactorSecret = null;
+    user.twoFactorEnabled = false;
+    await user.save();
+
+    res.json({ message: "2FA disabled successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to disable 2FA" });
+  }
+});
+
+// VERIFY 2FA DURING LOGIN
+app.post("/login/verify-2fa", async (req, res) => {
+  const { email, twoFactorToken } = req.body;
+
+  if (!email || !twoFactorToken) {
+    return res.status(400).json({ error: "Email and 2FA code are required" });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+    if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+      return res.status(400).json({ error: "2FA is not enabled for this account" });
+    }
+
+    // Verify the 2FA token
+    const verified = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: "base32",
+      token: twoFactorToken,
+      window: 1,
+    });
+
+    if (!verified) {
+      return res.status(401).json({ error: "Invalid 2FA code" });
+    }
+
+    // Create JWT token
+    const token = jwt.sign(
+      { userId: user._id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    res.json({
+      message: "Login successful",
+      token,
+      userId: user._id,
+      username: user.username,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 

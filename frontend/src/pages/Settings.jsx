@@ -36,8 +36,19 @@ const Settings = () => {
   // =========================
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [loginAlerts, setLoginAlerts] = useState(true);
-  const [twoFactorAuth, setTwoFactorAuth] = useState(true);
+  const [twoFactorAuth, setTwoFactorAuth] = useState(false);
   const [dataEncryption, setDataEncryption] = useState(true);
+
+  // =========================
+  // TWO-FACTOR AUTH (TOTP)
+  // =========================
+  const [showTwoFactorSetup, setShowTwoFactorSetup] = useState(false);
+  const [twoFactorQrCode, setTwoFactorQrCode] = useState("");
+  const [twoFactorSecret, setTwoFactorSecret] = useState("");
+  const [twoFactorVerifyCode, setTwoFactorVerifyCode] = useState("");
+  const [twoFactorStatus, setTwoFactorStatus] = useState("idle");
+  const [showDisable2FA, setShowDisable2FA] = useState(false);
+  const [disable2FAPassword, setDisable2FAPassword] = useState("");
 
   // =========================
   // PASSKEYS (WebAuthn)
@@ -296,6 +307,117 @@ const Settings = () => {
   };
 
   // =========================
+  // 2FA HANDLERS
+  // =========================
+  const handleSetup2FA = async () => {
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/setup/${userId}`,
+        { method: "POST" }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to setup 2FA");
+      }
+
+      const data = await res.json();
+      setTwoFactorQrCode(data.qrCode);
+      setTwoFactorSecret(data.secret);
+      setShowTwoFactorSetup(true);
+      setTwoFactorStatus("idle");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to setup 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleVerify2FASetup = async () => {
+    if (!twoFactorVerifyCode || twoFactorVerifyCode.length !== 6) {
+      alert("Please enter a valid 6-digit code");
+      return;
+    }
+
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/verify-setup/${userId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            secret: twoFactorSecret,
+            token: twoFactorVerifyCode,
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Verification failed");
+      }
+
+      setTwoFactorAuth(true);
+      setShowTwoFactorSetup(false);
+      setTwoFactorQrCode("");
+      setTwoFactorSecret("");
+      setTwoFactorVerifyCode("");
+      setTwoFactorStatus("idle");
+      alert("Two-Factor Authentication enabled successfully!");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to verify 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleDisable2FA = async () => {
+    if (!disable2FAPassword) {
+      alert("Please enter your password");
+      return;
+    }
+
+    try {
+      setTwoFactorStatus("loading");
+
+      const res = await fetchWithAuth(
+        `http://localhost:3000/api/2fa/disable/${userId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: disable2FAPassword }),
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to disable 2FA");
+      }
+
+      setTwoFactorAuth(false);
+      setShowDisable2FA(false);
+      setDisable2FAPassword("");
+      setTwoFactorStatus("idle");
+      alert("Two-Factor Authentication disabled");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to disable 2FA");
+      setTwoFactorStatus("idle");
+    }
+  };
+
+  const handleCancel2FASetup = () => {
+    setShowTwoFactorSetup(false);
+    setTwoFactorQrCode("");
+    setTwoFactorSecret("");
+    setTwoFactorVerifyCode("");
+  };
+
+  // =========================
   // RENDER
   // =========================
   if (loading) {
@@ -386,13 +508,140 @@ const Settings = () => {
           </div>
         </div>
 
-        {/* SECURITY SETTINGS */}
+        {/* TWO-FACTOR AUTHENTICATION */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Security Settings</h2>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={twoFactorAuth} onChange={() => setTwoFactorAuth(!twoFactorAuth)} className="checkbox checkbox-primary" />
-            <span>Enable Two-Factor Authentication</span>
-          </label>
+          <h2 className="text-xl font-semibold mb-4">Two-Factor Authentication</h2>
+
+          {!showTwoFactorSetup && !showDisable2FA ? (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="font-medium">
+                    Status:{" "}
+                    {twoFactorAuth ? (
+                      <span className="text-green-600">Enabled</span>
+                    ) : (
+                      <span className="text-gray-500">Disabled</span>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {twoFactorAuth
+                      ? "Your account is protected with an authenticator app."
+                      : "Add an extra layer of security to your account."}
+                  </p>
+                </div>
+                {twoFactorAuth ? (
+                  <button
+                    onClick={() => setShowDisable2FA(true)}
+                    className="btn btn-outline btn-error"
+                    disabled={twoFactorStatus === "loading"}
+                  >
+                    Disable 2FA
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSetup2FA}
+                    className="btn btn-primary"
+                    disabled={twoFactorStatus === "loading"}
+                  >
+                    {twoFactorStatus === "loading" ? "Loading..." : "Enable 2FA"}
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : showTwoFactorSetup ? (
+            <div className="space-y-4">
+              <h3 className="font-medium">Setup Two-Factor Authentication</h3>
+
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <p className="text-sm text-gray-600 mb-3">
+                  1. Install an authenticator app (Google Authenticator, Authy, etc.)
+                </p>
+                <p className="text-sm text-gray-600 mb-3">
+                  2. Scan this QR code with your authenticator app:
+                </p>
+
+                {twoFactorQrCode && (
+                  <div className="flex justify-center my-4">
+                    <img src={twoFactorQrCode} alt="2FA QR Code" className="border rounded" />
+                  </div>
+                )}
+
+                <p className="text-sm text-gray-600 mb-2">Or enter this code manually:</p>
+                <code className="block bg-gray-200 p-2 rounded text-sm break-all">
+                  {twoFactorSecret}
+                </code>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-600 mb-2">
+                  3. Enter the 6-digit code from your authenticator app:
+                </p>
+                <input
+                  type="text"
+                  value={twoFactorVerifyCode}
+                  onChange={(e) =>
+                    setTwoFactorVerifyCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  placeholder="Enter 6-digit code"
+                  className="input input-bordered w-full max-w-xs"
+                  maxLength={6}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleVerify2FASetup}
+                  className="btn btn-primary"
+                  disabled={twoFactorVerifyCode.length !== 6 || twoFactorStatus === "loading"}
+                >
+                  {twoFactorStatus === "loading" ? "Verifying..." : "Verify & Enable"}
+                </button>
+                <button
+                  onClick={handleCancel2FASetup}
+                  className="btn btn-outline"
+                  disabled={twoFactorStatus === "loading"}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <h3 className="font-medium text-red-600">Disable Two-Factor Authentication</h3>
+              <p className="text-sm text-gray-600">Enter your password to confirm disabling 2FA:</p>
+              <input
+                type="password"
+                value={disable2FAPassword}
+                onChange={(e) => setDisable2FAPassword(e.target.value)}
+                placeholder="Enter your password"
+                className="input input-bordered w-full max-w-xs"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDisable2FA}
+                  className="btn btn-error"
+                  disabled={!disable2FAPassword || twoFactorStatus === "loading"}
+                >
+                  {twoFactorStatus === "loading" ? "Disabling..." : "Disable 2FA"}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDisable2FA(false);
+                    setDisable2FAPassword("");
+                  }}
+                  className="btn btn-outline"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* OTHER SECURITY SETTINGS */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">Other Security Settings</h2>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={loginAlerts} onChange={() => setLoginAlerts(!loginAlerts)} className="checkbox checkbox-primary" />
             <span>Login Alerts</span>
@@ -405,7 +654,7 @@ const Settings = () => {
             <input type="checkbox" checked={dataEncryption} onChange={() => setDataEncryption(!dataEncryption)} className="checkbox checkbox-primary" />
             <span>Enable Data Encryption</span>
           </label>
-          <p className="text-sm text-gray-500 mt-4">Note: Security preferences are currently for display only. Backend integration coming soon.</p>
+          <p className="text-sm text-gray-500 mt-4">Note: These preferences are currently for display only.</p>
         </div>
 
         {/* DEVICE AUTH */}

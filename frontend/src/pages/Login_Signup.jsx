@@ -19,6 +19,11 @@ const LoginPage = () => {
   const [verificationCode, setVerificationCode] = useState("");
   const [loginData, setLoginData] = useState(null);
 
+  // 2FA states
+  const [showTwoFactor, setShowTwoFactor] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [pendingEmail, setPendingEmail] = useState("");
+
   const navigate = useNavigate();
 
   const handleSubmit = async () => {
@@ -60,19 +65,26 @@ const LoginPage = () => {
 
       // ✅ LOGIN SUCCESS
       if (action === "Login") {
+        // Check if 2FA is required
+        if (data.requiresTwoFactor) {
+          setPendingEmail(data.email);
+          setShowTwoFactor(true);
+          return;
+        }
+
         // Get device token
         const deviceToken = getOrCreateDeviceToken();
         const deviceInfo = getDeviceInfo();
-        
+
         // Check if device is trusted
         const deviceCheckRes = await fetch("http://localhost:3000/check-device", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, deviceToken }),
         });
-        
+
         const deviceCheckData = await deviceCheckRes.json();
-        
+
         // If device auth is enabled and device is not trusted
         if (deviceCheckData.deviceAuthEnabled && !deviceCheckData.trusted) {
           // Send verification code to email
@@ -98,7 +110,7 @@ const LoginPage = () => {
             return;
           }
         }
-        
+
         // Device is trusted or auth not enabled - proceed with login
         localStorage.setItem("token", data.token);
         localStorage.setItem("userId", data.userId);
@@ -157,6 +169,124 @@ const LoginPage = () => {
       alert("Server error during verification");
     }
   };
+
+  const handleVerify2FA = async () => {
+    if (!twoFactorCode || twoFactorCode.length !== 6) {
+      alert("Please enter a valid 6-digit code");
+      return;
+    }
+
+    try {
+      const res = await fetch("http://localhost:3000/login/verify-2fa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: pendingEmail,
+          twoFactorToken: twoFactorCode,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || "Invalid 2FA code");
+        return;
+      }
+
+      // Get device token for device verification check
+      const deviceToken = getOrCreateDeviceToken();
+      const deviceInfo = getDeviceInfo();
+
+      // Check if device is trusted
+      const deviceCheckRes = await fetch("http://localhost:3000/check-device", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: pendingEmail, deviceToken }),
+      });
+
+      const deviceCheckData = await deviceCheckRes.json();
+
+      // If device auth is enabled and device is not trusted
+      if (deviceCheckData.deviceAuthEnabled && !deviceCheckData.trusted) {
+        // Send verification code to email
+        const verifyRes = await fetch("http://localhost:3000/send-device-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: pendingEmail,
+            deviceToken,
+            deviceName: deviceInfo.deviceName,
+            userAgent: deviceInfo.userAgent,
+          }),
+        });
+
+        if (verifyRes.ok) {
+          setLoginData(data);
+          setShowTwoFactor(false);
+          setShowVerification(true);
+          alert("A verification code has been sent to your email.");
+          return;
+        }
+      }
+
+      // Device is trusted or auth not enabled - complete login
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("userId", data.userId);
+      localStorage.setItem("username", data.username);
+      navigate("/home");
+    } catch (err) {
+      console.error(err);
+      alert("Server error during 2FA verification");
+    }
+  };
+
+  // If showing 2FA verification screen
+  if (showTwoFactor) {
+    return (
+      <div className="title">
+        <h1>GuardFile</h1>
+        <div className="container">
+          <div className="header">
+            <div className="text">Two-Factor Authentication</div>
+            <div className="underline"></div>
+          </div>
+
+          <div className="inputs">
+            <p style={{ textAlign: "center", marginBottom: "20px", color: "#666" }}>
+              Enter the 6-digit code from your authenticator app
+            </p>
+
+            <div className="input">
+              <img src={password_icon} width={25} height={25} alt="2FA Code" />
+              <input
+                type="text"
+                placeholder="Enter 6-digit code"
+                value={twoFactorCode}
+                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                maxLength={6}
+              />
+            </div>
+          </div>
+
+          <div className="submit-container">
+            <div className="submit" onClick={handleVerify2FA}>
+              Verify
+            </div>
+            <div
+              className="submit gray"
+              onClick={() => {
+                setShowTwoFactor(false);
+                setTwoFactorCode("");
+                setPendingEmail("");
+              }}
+            >
+              Cancel
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // If showing verification screen
   if (showVerification) {
